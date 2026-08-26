@@ -143,7 +143,7 @@ class SoCChiselConfig(itcmSize: MemorySize, dtcmSize: MemorySize) {
       moduleClass = "coralnpu.CoreTlul",
       params = CoreTlulParameters(
         lsuDataBits = 128,
-        enableRvv = false,
+        enableRvv = true,
         enableFetchL0 = false,
         fetchDataBits = 128,
         enableFloat = true,

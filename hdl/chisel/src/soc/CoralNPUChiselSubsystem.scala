@@ -38,9 +38,9 @@ class CoralNPUChiselSubsystemIO(
 
   // These devices are handled specially within the subsystem (e.g., converted to AXI)
   // and should not have external TileLink ports created for them.
-  val speciallyHandledDevices = Set("ddr_ctrl", "ddr_mem")
+  val speciallyHandledDevices = Set.empty[String]
   // Note: SpeciallyHandledHosts modified to matches the XBAR port names to accomodate multiple hosts in one IP
-  val speciallyHandledHosts = Set("ispyocto_m1", "ispyocto_m2")
+  val speciallyHandledHosts = Set("uart_host")   // uart_host 用 Axi2TLUL 手动接入（T022），不生成 external TL 端口
 
   val externalHostPorts = cfg
     .hosts(enableTestHarness)
@@ -70,26 +70,10 @@ class CoralNPUChiselSubsystemIO(
     p.name -> (if (p.direction == coralnpu.soc.In) Input(port) else Output(port))
   })
 
-  val p            = new Parameters
-  val ddrCtrlWidth = cfg.devices.find(_.name == "ddr_ctrl").get.width
-  val ddrMemWidth  = cfg.devices.find(_.name == "ddr_mem").get.width
-  val ddr_ctrl_axi = new AxiMasterIO(32, ddrCtrlWidth, p.axi2IdBits)
-  // We specify the 256-bit AXI width and 1-bit ID for DDR here.
-  // The output from the Xbar is 128-bits / 6-bits, and we instantiate
-  // width and TL->AXI bridges elsewhere to adapt the interfaces.
-  val ddr_mem_axi = new AxiMasterIO(32, 256, 1)
-
-  // ISP Ports (Manual exposure for FPGA integration)
-  // Control Interface (Slave): CPU -> Xbar -> ISP
-  // Using generic Host2Device bundle
-  val ispyocto_ctrl = new OpenTitanTileLink.Host2Device(
-    deviceParams(cfg.devices.indexWhere(_.name == "ispyocto_ctrl"))
-  )
-
-  // Master Interfaces (Master): ISP -> AXI2TLUL -> Xbar -> Memory
-  // Need Flipped AxiMasterIO because Subsystem acts as Slave to ISP
-  val ispyocto_m1_axi = Flipped(new AxiMasterIO(32, 64, 4))
-  val ispyocto_m2_axi = Flipped(new AxiMasterIO(32, 64, 4))
+  val p = new Parameters
+  // UART host 加载通路（host_cmd_fsm → Axi2TLUL → Xbar，T022）
+  // AXI 128 位数据 / 6 位 ID，与 host_cmd_fsm（AXI_ID=0 单拍）匹配
+  val uart_host_axi = Flipped(new AxiMasterIO(32, 128, 6))
 }
 
 import chisel3.experimental.BaseModule
@@ -143,22 +127,8 @@ class CoralNPUChiselSubsystem(
   }
 
   withClockAndReset(io.clk_i, (!io.rst_ni.asBool).asAsyncReset) {
-    // --- 1. Instantiate spi2tlul first (with hardware reset) ---
-    val spi2tlul_config = SoCChiselConfig(itcmSize, dtcmSize).modules.find(_.name == "spi2tlul").get
-    val spi2tlul        = {
-      val p          = spi2tlul_config.params.asInstanceOf[Spi2TlulParameters]
-      val spi2tlul_p = new Parameters
-      spi2tlul_p.lsuDataBits = p.lsuDataBits
-      spi2tlul_p.axi2IdBits = 8
-      val m = Module(new Spi2TLUL(spi2tlul_p.toTLUL()))
-      m.suggestName("spi2tlul")
-      m
-    }
-
     // --- 2. Define combined reset (active-low for modules expecting rst_ni) ---
-    val soft_reset     = spi2tlul.io.sys_rst_o
-    val raw_combined_n = io.rst_ni.asBool && !soft_reset
-    val combined_rst_n = withClockAndReset(io.clk_i, (!raw_combined_n).asAsyncReset) {
+    val combined_rst_n = withClockAndReset(io.clk_i, (!io.rst_ni.asBool).asAsyncReset) {
       val r1 = RegInit(false.B)
       val r2 = RegInit(false.B)
       r1 := true.B
@@ -237,7 +207,6 @@ class CoralNPUChiselSubsystem(
 
     // --- 5. Instantiate other modules ---
     val otherModules = SoCChiselConfig(itcmSize, dtcmSize).modules
-      .filter(_.name != "spi2tlul")
       .flatMap { config =>
         val m = instantiateModule(config)
         if (m != null) {
@@ -249,11 +218,11 @@ class CoralNPUChiselSubsystem(
       }
       .toMap
 
-    val instantiatedModules = otherModules + ("spi2tlul" -> spi2tlul)
+    val instantiatedModules = otherModules
 
     // --- Dynamic Wiring ---
     // Note: SpeciallyHandledHosts modified to matches the XBAR port names to accomodate multiple hosts in one IP
-    val speciallyHandledHosts = Set("ispyocto_m1", "ispyocto_m2")
+    val speciallyHandledHosts = Set("uart_host")
 
     // Create a map of all ports on all instantiated modules for easy lookup.
     val modulePorts = mutable.Map[String, Data]()
@@ -269,9 +238,8 @@ class CoralNPUChiselSubsystem(
       modulePorts.get(s"$name.io.clk_i").foreach(_ := io.clk_i)
       modulePorts.get(s"$name.io.clock").foreach(_ := io.clk_i)
 
-      val m_rst_ni = if (name == "spi2tlul") io.rst_ni else combined_rst_n.asAsyncReset
-      val m_reset  =
-        if (name == "spi2tlul") (!io.rst_ni.asBool).asAsyncReset else (!combined_rst_n).asAsyncReset
+      val m_rst_ni = combined_rst_n.asAsyncReset
+      val m_reset  = (!combined_rst_n).asAsyncReset
 
       modulePorts.get(s"$name.io.rst_ni").foreach(_ := m_rst_ni)
       modulePorts.get(s"$name.io.reset").foreach(_ := m_reset)
@@ -340,121 +308,26 @@ class CoralNPUChiselSubsystem(
     val coreIrq = modulePorts("rvv_core.io.irq")
     coreIrq := plicIrq
 
-    // --- DDR AXI Interface ---
-    val ddrAsyncPorts = io.async_ports_devices("ddr").asInstanceOf[ClockResetBundle]
-    val ddr_clk       = ddrAsyncPorts.clock
-    val ddr_rst       = ddrAsyncPorts.reset
+    // --- UART Host (AXI -> TLUL, T022) ---
+    // host_cmd_fsm（AXI master）→ Axi2TLUL → Xbar uart_host 端口 → 核 tl_device/SRAM/外设
+    // 与 chip_nexus 的 ISP Axi2TLUL 接入模式一致（复用上游 Axi2TLUL + OpenTitanTileLink user 信号）
+    val uartHostName  = "uart_host"
+    val uartAxiParams = new Parameters
+    uartAxiParams.lsuDataBits = 128
 
-    val ddr_ctrl_tlul_p = deviceParams(cfg.devices.indexWhere(_.name == "ddr_ctrl"))
-    val ddr_ctrl_axi_p  = new Parameters
-    ddr_ctrl_axi_p.lsuDataBits = ddr_ctrl_tlul_p.w * 8
-    val ddr_ctrl_axi_conv = Module(
-      new TLUL2Axi(
-        ddr_ctrl_tlul_p,
-        ddr_ctrl_axi_p.axi2DataBits,
-        ddr_ctrl_axi_p.axi2AddrBits,
-        ddr_ctrl_axi_p.axi2IdBits,
+    val uartBridge = Module(
+      new Axi2TLUL(
+        uartAxiParams.toTLUL(),
         () => new OpenTitanTileLink_A_User,
         () => new OpenTitanTileLink_D_User
       )
     )
-    ddr_ctrl_axi_conv.clock := ddr_clk
-    ddr_ctrl_axi_conv.reset := ddr_rst
-    ddr_ctrl_axi_conv.io.tl_a <> xbar.io.devices("ddr_ctrl").a
-    ddr_ctrl_axi_conv.io.tl_d <> xbar.io.devices("ddr_ctrl").d
-    io.ddr_ctrl_axi <> ddr_ctrl_axi_conv.io.axi
-
-    // --- DDR Memory AXI Interface (128-bit TL -> 256-bit TL -> 256-bit AXI) ---
-    // Define parameters for the 256-bit bus that exists AFTER the width bridge.
-    val ddr_mem_256_tlul_p = new bus.TLULParameters(
-      dataBits = 256,
-      addrBits = 32,
-      idBits = 10
-    )
-
-    // Define parameters for the final 256-bit AXI port.
-    val ddr_mem_axi_p = {
-      val p = new Parameters
-      p.lsuDataBits = 256
-      p.axi2IdBits = 1
-      p
-    }
-
-    // Instantiate the bridge: 128-bit (from xbar) to 256-bit.
-    val ddr_mem_bridge = Module(new TlulWidthBridge(xbar.commonParams, ddr_mem_256_tlul_p))
-
-    // Instantiate the AXI converter: 256-bit TL to 256-bit AXI.
-    val ddr_mem_axi_conv = Module(
-      new TLUL2Axi(
-        ddr_mem_256_tlul_p,
-        ddr_mem_axi_p.axi2DataBits,
-        ddr_mem_axi_p.axi2AddrBits,
-        ddr_mem_axi_p.axi2IdBits,
-        () => new OpenTitanTileLink_A_User,
-        () => new OpenTitanTileLink_D_User
-      )
-    )
-
-    ddr_mem_bridge.clock   := ddr_clk
-    ddr_mem_bridge.reset   := ddr_rst
-    ddr_mem_axi_conv.clock := ddr_clk
-    ddr_mem_axi_conv.reset := ddr_rst
-
-    // Wire the components together: Xbar (128) -> Bridge -> AXI Conv (256) -> IO (256)
-    ddr_mem_bridge.io.tl_h <> xbar.io.devices("ddr_mem")
-    ddr_mem_axi_conv.io.tl_a <> ddr_mem_bridge.io.tl_d.a
-    ddr_mem_bridge.io.tl_d.d <> ddr_mem_axi_conv.io.tl_d
-    io.ddr_mem_axi <> ddr_mem_axi_conv.io.axi
-
-    // --- ISP Integration (Manual Wiring) ---
-    // Wired to external IOs instead of internal module.
-
-    // 1. Control Interface (TLUL Slave)
-    // Map Config Port ["ispyocto_ctrl"] -> IO
-    io.ispyocto_ctrl <> xbar.io.devices("ispyocto_ctrl")
-
-    // 2. AXI Master 1 -> TLUL Host
-    // Map IO [AXI] -> Bridge -> Xbar Port ["ispyocto_m1"]
-    val ispAsyncPorts = io.async_ports_hosts("isp_axi_clk").asInstanceOf[ClockResetBundle]
-    val m1HostName    = "ispyocto_m1"
-    val ispAxiParams  = new Parameters
-    ispAxiParams.lsuDataBits = 64
-
-    val axibm1 = withClockAndReset(ispAsyncPorts.clock, ispAsyncPorts.reset) {
-      Module(
-        new Axi2TLUL(
-          ispAxiParams.toTLUL(),
-          () => new OpenTitanTileLink_A_User,
-          () => new OpenTitanTileLink_D_User
-        )
-      )
-    }
-    axibm1.io.axi <> io.ispyocto_m1_axi
-    xbar.io.hosts(m1HostName).a.valid                := axibm1.io.tl_a.valid
-    axibm1.io.tl_a.ready                             := xbar.io.hosts(m1HostName).a.ready
-    xbar.io.hosts(m1HostName).a.bits                 := axibm1.io.tl_a.bits
-    xbar.io.hosts(m1HostName).a.bits.user.instr_type := MuBi4.False.asUInt
-    axibm1.io.tl_d <> xbar.io.hosts(m1HostName).d
-
-    // 3. AXI Master 2 -> TLUL Host
-    // Map IO [AXI] -> Bridge -> Xbar Port ["ispyocto_m2"]
-    val m2HostName = "ispyocto_m2"
-
-    val axibm2 = withClockAndReset(ispAsyncPorts.clock, ispAsyncPorts.reset) {
-      Module(
-        new Axi2TLUL(
-          ispAxiParams.toTLUL(),
-          () => new OpenTitanTileLink_A_User,
-          () => new OpenTitanTileLink_D_User
-        )
-      )
-    }
-    axibm2.io.axi <> io.ispyocto_m2_axi
-    xbar.io.hosts(m2HostName).a.valid                := axibm2.io.tl_a.valid
-    axibm2.io.tl_a.ready                             := xbar.io.hosts(m2HostName).a.ready
-    xbar.io.hosts(m2HostName).a.bits                 := axibm2.io.tl_a.bits
-    xbar.io.hosts(m2HostName).a.bits.user.instr_type := MuBi4.False.asUInt
-    axibm2.io.tl_d <> xbar.io.hosts(m2HostName).d
+    uartBridge.io.axi <> io.uart_host_axi
+    xbar.io.hosts(uartHostName).a.valid                := uartBridge.io.tl_a.valid
+    uartBridge.io.tl_a.ready                           := xbar.io.hosts(uartHostName).a.ready
+    xbar.io.hosts(uartHostName).a.bits                 := uartBridge.io.tl_a.bits
+    xbar.io.hosts(uartHostName).a.bits.user.instr_type := MuBi4.False.asUInt
+    uartBridge.io.tl_d <> xbar.io.hosts(uartHostName).d
   }
 }
 

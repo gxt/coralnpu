@@ -77,11 +77,7 @@ class CrossbarConfig(itcmSize: MemorySize, dtcmSize: MemorySize) {
   def hosts(enableTestHarness: Boolean): Seq[HostConfig] = {
     val baseHosts = Seq(
       HostConfig("coralnpu_core", width = 128),
-      HostConfig("spi2tlul", width = 128),
-      HostConfig("dma", width = 128),
-      HostConfig("ispyocto_m1", width = 64, clockDomain = "isp_axi_clk"),
-      HostConfig("ispyocto_m2", width = 64, clockDomain = "isp_axi_clk"),
-      HostConfig("autoboot", width = 32)
+      HostConfig("uart_host", width = 128)   // UART host 加载通路（host_cmd_fsm → Axi2TLUL，T022）
     )
     if (enableTestHarness) {
       baseHosts :+ HostConfig("test_host_32", width = 32, clockDomain = "test")
@@ -115,34 +111,10 @@ class CrossbarConfig(itcmSize: MemorySize, dtcmSize: MemorySize) {
   val devices = Seq(
     DeviceConfig("coralnpu_device", coralnpu_ranges, width = 128),
     DeviceConfig("rom", Seq(AddressRange(0x10000000, 0x8000))),                 // 32kB
-    DeviceConfig("sram", Seq(AddressRange(0x20000000, 0x400000)), width = 128), // 4MB
-    DeviceConfig("uart0", Seq(AddressRange(0x40000000, 0x1000))),
-    DeviceConfig("clk_table", Seq(AddressRange(0x40001000, 0x1000))),
-    DeviceConfig("uart1", Seq(AddressRange(0x40010000, 0x1000))),
-    DeviceConfig("spi_master", Seq(AddressRange(0x40020000, 0x1000))),
+    DeviceConfig("sram", Seq(AddressRange(0x20000000, 0x40000)), width = 128),  // 256KB（T022 裁剪）
     DeviceConfig("gpio", Seq(AddressRange(0x40030000, 0x1000))),
     DeviceConfig("clint", Seq(AddressRange(0x02000000, 0x10000))),
-    DeviceConfig("plic", Seq(AddressRange(0x0c000000, 0x4000000))),
-    DeviceConfig("i2c_master", Seq(AddressRange(0x40040000, 0x1000))),
-    DeviceConfig("dma", Seq(AddressRange(0x40050000, 0x1000))),
-    DeviceConfig("spi_master_flash", Seq(AddressRange(0x40070000, 0x1000))),
-    DeviceConfig(
-      "ispyocto_ctrl",
-      Seq(AddressRange(0x50000000, 0x100000)),
-      clockDomain = "isp_axi_clk"
-    ), // 1MB
-    DeviceConfig(
-      "ddr_ctrl",
-      Seq(AddressRange(0x70000000, 0x1000)),
-      clockDomain = "ddr",
-      width = 32
-    ), // 4kB for DDR Control
-    DeviceConfig(
-      "ddr_mem",
-      Seq(AddressRange(BigInt("80000000", 16), BigInt("80000000", 16))),
-      clockDomain = "ddr",
-      width = 128
-    ) // 2GB for DDR Memory
+    DeviceConfig("plic", Seq(AddressRange(0x0c000000, 0x4000000)))
   )
 
   // A map defining which hosts are allowed to connect to which devices.
@@ -150,61 +122,29 @@ class CrossbarConfig(itcmSize: MemorySize, dtcmSize: MemorySize) {
     val baseConnections = Map(
       "coralnpu_core" -> Seq(
         "sram",
-        "uart1",
         "coralnpu_device",
         "rom",
-        "uart0",
-        "ddr_ctrl",
-        "ddr_mem",
-        "spi_master",
         "gpio",
-        "i2c_master",
-        "dma",
-        "spi_master_flash",
         "clint",
-        "plic",
-        "ispyocto_ctrl",
-        "clk_table"
+        "plic"
       ),
-      "spi2tlul" -> Seq("coralnpu_device", "sram", "ddr_ctrl", "ddr_mem"),
-      "dma"      -> Seq(
+      "uart_host" -> Seq(
+        "coralnpu_device",
         "sram",
-        "coralnpu_device",
         "rom",
-        "ddr_ctrl",
-        "ddr_mem",
-        "spi_master",
         "gpio",
-        "i2c_master",
-        "uart0",
-        "uart1",
-        "spi_master_flash",
         "clint",
-        "plic",
-        "ispyocto_ctrl",
-        "clk_table"
-      ),
-      "ispyocto_m1" -> Seq("sram", "ddr_mem", "coralnpu_device"),
-      "ispyocto_m2" -> Seq("sram", "ddr_mem", "coralnpu_device"),
-      "autoboot"    -> Seq("coralnpu_device")
+        "plic"
+      )
     )
     if (enableTestHarness) {
       baseConnections + ("test_host_32" -> Seq(
         "rom",
         "sram",
-        "uart0",
         "coralnpu_device",
-        "ddr_ctrl",
-        "ddr_mem",
-        "spi_master",
         "gpio",
-        "i2c_master",
-        "dma",
-        "spi_master_flash",
         "clint",
-        "plic",
-        "ispyocto_ctrl",
-        "clk_table"
+        "plic"
       ))
     } else {
       baseConnections

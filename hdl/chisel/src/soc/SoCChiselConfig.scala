@@ -143,7 +143,7 @@ class SoCChiselConfig(itcmSize: MemorySize, dtcmSize: MemorySize) {
       moduleClass = "coralnpu.CoreTlul",
       params = CoreTlulParameters(
         lsuDataBits = 128,
-        enableRvv = true,
+        enableRvv = false,
         enableFetchL0 = false,
         fetchDataBits = 128,
         enableFloat = true,
@@ -171,45 +171,6 @@ class SoCChiselConfig(itcmSize: MemorySize, dtcmSize: MemorySize) {
       )
     ),
     ChiselModuleConfig(
-      name = "spi2tlul",
-      moduleClass = "bus.Spi2TLUL",
-      params = Spi2TlulParameters(lsuDataBits = 128),
-      hostConnections = Map("io.tl" -> "spi2tlul"),
-      externalPorts = Seq(
-        ExternalPort("spi_clk", Clk, In, "io.spi.clk"),
-        ExternalPort("spi_csb", Bool, In, "io.spi.csb"),
-        ExternalPort("spi_mosi", Bool, In, "io.spi.mosi"),
-        ExternalPort("spi_miso", Bool, Out, "io.spi.miso")
-      )
-    ),
-    ChiselModuleConfig(
-      name = "ispyocto",
-      moduleClass = "ip.ispyocto.IspWrapper",
-      params = IspParameters(),
-      hostConnections = Map(
-        "io.m1_tl_h" -> "ispyocto_m1",
-        "io.m2_tl_h" -> "ispyocto_m2"
-      ),
-      deviceConnections = Map(
-        "io.tl_host" -> "ispyocto_ctrl"
-      ),
-      externalPorts = Seq(
-      )
-    ),
-    ChiselModuleConfig(
-      name = "spi_master",
-      moduleClass = "bus.SpiMaster",
-      params = SpiMasterParameters(lsuDataBits = 32),
-      deviceConnections = Map("io.tl" -> "spi_master"),
-      externalPorts = Seq(
-        ExternalPort("spim_sclk", Bool, Out, "io.spi.sclk"),
-        ExternalPort("spim_csb", Bool, Out, "io.spi.csb"),
-        ExternalPort("spim_mosi", Bool, Out, "io.spi.mosi"),
-        ExternalPort("spim_miso", Bool, In, "io.spi.miso"),
-        ExternalPort("spim_clk_i", Clk, In, "io.spi_clk_i")
-      )
-    ),
-    ChiselModuleConfig(
       name = "gpio",
       moduleClass = "bus.GPIO",
       params = GPIOModuleParameters(width = 8),
@@ -218,27 +179,6 @@ class SoCChiselConfig(itcmSize: MemorySize, dtcmSize: MemorySize) {
         ExternalPort("gpio_o", Logic(8), Out, "io.gpio_o"),
         ExternalPort("gpio_en_o", Logic(8), Out, "io.gpio_en_o"),
         ExternalPort("gpio_i", Logic(8), In, "io.gpio_i")
-      )
-    ),
-    ChiselModuleConfig(
-      name = "dma",
-      moduleClass = "bus.DmaEngine",
-      params = DmaParameters(hostDataBits = 128, deviceDataBits = 32),
-      hostConnections = Map("io.tl_host" -> "dma"),
-      deviceConnections = Map("io.tl_device" -> "dma"),
-      externalPorts = Seq.empty
-    ),
-    ChiselModuleConfig(
-      name = "spi_master_flash",
-      moduleClass = "bus.SpiMaster",
-      params = SpiMasterParameters(lsuDataBits = 32),
-      deviceConnections = Map("io.tl" -> "spi_master_flash"),
-      externalPorts = Seq(
-        ExternalPort("spim_flash_sclk", Bool, Out, "io.spi.sclk"),
-        ExternalPort("spim_flash_csb", Bool, Out, "io.spi.csb"),
-        ExternalPort("spim_flash_mosi", Bool, Out, "io.spi.mosi"),
-        ExternalPort("spim_flash_miso", Bool, In, "io.spi.miso"),
-        ExternalPort("spim_flash_clk_i", Clk, In, "io.spi_clk_i")
       )
     ),
     ChiselModuleConfig(
@@ -260,7 +200,7 @@ class SoCChiselConfig(itcmSize: MemorySize, dtcmSize: MemorySize) {
     ChiselModuleConfig(
       name = "sram",
       moduleClass = "soc.TlulSram",
-      params = TlulSramParameters(sramSizeBytes = 4 * 1024 * 1024, globalBaseAddr = 0x20000000),
+      params = TlulSramParameters(sramSizeBytes = 256 * 1024, globalBaseAddr = 0x20000000),
       deviceConnections = Map("io.tl" -> "sram"),
       externalPorts = Seq.empty
     )

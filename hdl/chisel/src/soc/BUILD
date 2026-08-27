@@ -98,8 +98,7 @@ chisel_cc_library(
     name = "coralnpu_chisel_subsystem_cc_library",
     chisel_lib = ":coralnpu_chisel_subsystem_lib",
     emit_class = "coralnpu.soc.CoralNPUChiselSubsystemEmitter",
-    gen_flags = ["--itcmSizeKBytes", "1024", "--dtcmSizeKBytes", "1024"],
-    module_name = "CoralNPUChiselSubsystemHighmem",
+    module_name = "CoralNPUChiselSubsystem",
 )
 
 verilator_cocotb_model(

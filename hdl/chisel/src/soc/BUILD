@@ -161,6 +161,19 @@ chisel_cc_library(
 )
 
 chisel_cc_library(
+    name = "coralnpu_chisel_subsystem_itcm8kb_dtcm1024kb_cc_library",
+    chisel_lib = ":coralnpu_chisel_subsystem_lib",
+    emit_class = "coralnpu.soc.CoralNPUChiselSubsystemEmitter",
+    gen_flags = [
+        "--itcmSizeKBytes",
+        "8",
+        "--dtcmSizeKBytes",
+        "1024",
+    ],
+    module_name = "CoralNPUChiselSubsystem_ITCM8KB_DTCM1024KB",
+)
+
+chisel_cc_library(
     name = "coralnpu_chisel_subsystem_itcm64kb_dtcm1024kb_cc_library",
     chisel_lib = ":coralnpu_chisel_subsystem_lib",
     emit_class = "coralnpu.soc.CoralNPUChiselSubsystemEmitter",
